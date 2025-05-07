@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Calendario del Profesional</title>
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@1.35.7/dist/umd/supabase.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    #calendar {
+      max-width: 900px;
+      margin: 40px auto;
+    }
+    .fc-timegrid-slot {
+      height: 40px !important;
+    }
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 999;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      background-color: white;
+      padding: 20px;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      width: 300px;
+      border-radius: 8px;
+    }
+    .modal h3 {
+      margin-top: 0;
+    }
+    .modal button {
+      margin-top: 10px;
+    }
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+      z-index: 998;
+    }
+    .add-button {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      font-size: 30px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <h2>Calendario del Profesional</h2>
+  <label for="inputId">Introduce tu ID de profesional:</label><br />
+  <input type="text" id="inputId" placeholder="ej: 8fa11281-xxxx..." size="40" />
+  <button onclick="buscarCitas()">Ver Calendario</button>
+
+  <div id="calendar"></div>
+  <p id="mensaje"></p>
+
+  <button class="add-button" onclick="abrirFormulario()">+</button>
+
+  <!-- Modal -->
+  <div class="modal-backdrop" id="backdrop"></div>
+  <div class="modal" id="modal">
+    <h3 id="modal-title"></h3>
+    <p><strong>Cliente:</strong> <span id="modal-client"></span></p>
+    <p><strong>Inicio:</strong> <span id="modal-start"></span></p>
+    <p><strong>Fin:</strong> <span id="modal-end"></span></p>
+    <button onclick="eliminarCita()">Eliminar cita</button>
+    <button onclick="abrirEditor()">Editar cita</button>
+    <button onclick="cerrarModal()">Cerrar</button>
+  </div>
+
+  <div class="modal-backdrop" id="form-backdrop"></div>
+  <div class="modal" id="form-modal">
+    <h3>Nueva Cita</h3>
+    <label>Servicio:<br><input type="text" id="nuevo-servicio" /></label><br>
+    <label>Cliente:<br><input type="text" id="nuevo-cliente" /></label><br>
+    <label>Inicio:<br><input type="datetime-local" id="nuevo-inicio" /></label><br>
+    <button onclick="crearCita()">Crear cita</button>
+    <button onclick="cerrarFormulario()">Cancelar</button>
+  </div>
+
+  <div class="modal-backdrop" id="edit-backdrop"></div>
+  <div class="modal" id="edit-modal">
+    <h3>Editar Cita</h3>
+    <label>Servicio:<br><input type="text" id="edit-servicio" /></label><br>
+    <label>Cliente:<br><input type="text" id="edit-cliente" /></label><br>
+    <label>Inicio:<br><input type="datetime-local" id="edit-inicio" /></label><br>
+    <button onclick="guardarEdicion()">Guardar cambios</button>
+    <button onclick="cerrarEditor()">Cancelar</button>
+  </div>
+
+
+
+  <script>
+    const supabaseUrl = 'https://rzhrkvjpquelfodvfwmo.supabase.co';
+    const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ6aHJrdmpwcXVlbGZvZHZmd21vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDU1MDkwNzAsImV4cCI6MjA2MTA4NTA3MH0.CPVsSHO6bDkaNUCtb7kiUqJR9djPUdjeosejm5Hl0bM';
+    const supabase = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
+
+    let calendar;
+    let citaSeleccionada = null;
+
+    // Convierte el valor del input (que es 'YYYY-MM-DDTHH:mm') en UTC *sin* ajuste local
+    function parseDatetimeLocalAsUTC(datetimeLocalValue) {
+      const [datePart, timePart] = datetimeLocalValue.split('T');
+      const [year, month, day] = datePart.split('-').map(Number);
+      const [hour, minute] = timePart.split(':').map(Number);
+      return new Date(Date.UTC(year, month - 1, day, hour, minute));
+    }
+
+    function cerrarModal() {
+      document.getElementById('modal').style.display = 'none';
+      document.getElementById('backdrop').style.display = 'none';
+    }
+
+    function abrirFormulario() {
+      document.getElementById('form-modal').style.display = 'block';
+      document.getElementById('form-backdrop').style.display = 'block';
+    }
+    
+    function cerrarFormulario() {
+      document.getElementById('form-modal').style.display = 'none';
+      document.getElementById('form-backdrop').style.display = 'none';
+    }
+
+    async function crearCita() {
+      const servicioNombre = document.getElementById('nuevo-servicio').value.trim();
+      const clienteNombre = document.getElementById('nuevo-cliente').value.trim();
+      const inicio = document.getElementById('nuevo-inicio').value;
+      const profesionalId = document.getElementById('inputId').value.trim();
+    
+      if (!servicioNombre || !clienteNombre || !inicio || !profesionalId) {
+        alert('Rellena todos los campos.');
+        return;
+      }
+    
+      // Buscar el servicio
+      const { data: servicio, error: errorServicio } = await supabase
+        .from('services')
+        .select('id')
+        .ilike('name', servicioNombre)
+        .single();
+    
+      if (errorServicio || !servicio) {
+        alert('El servicio no existe.');
+        return;
+      }
+    
+      // Verificar que el profesional lo ofrece y obtener duración
+      const { data: rel, error: errorRel } = await supabase
+        .from('professional_services')
+        .select('custom_duration, custom_price')
+        .eq('service_id', servicio.id)
+        .eq('professional_id', profesionalId)
+        .eq('is_active', true)
+        .single();
+    
+      if (errorRel || !rel) {
+        alert('No ofreces ese servicio.');
+        return;
+      }
+    
+      const duracion = rel.custom_duration; // en minutos
+      const precio = rel.custom_price;
+    
+      // Buscar el cliente
+      const { data: cliente, error: errorCliente } = await supabase
+        .from('clients')
+        .select('id')
+        .ilike('name', clienteNombre)
+        .single();
+    
+      if (errorCliente || !cliente) {
+        alert('El cliente no existe.');
+        return;
+      }
+    
+      // Verificar que la hora esté dentro del horario disponible del profesional ese día
+      const fechaInicio = parseDatetimeLocalAsUTC(inicio);
+      const diaSemana = fechaInicio.getDay(); // 0=domingo, 6=sábado
+      const hora = fechaInicio.toTimeString().slice(0, 5); // 'HH:MM'
+    
+      const { data: disponibilidad, error: errorDisp } = await supabase
+        .from('availability')
+        .select('start_time, end_time')
+        .eq('professional_id', profesionalId)
+        .eq('day_of_week', diaSemana)
+        .single();
+    
+      if (errorDisp || !disponibilidad) {
+        alert('Este profesional no trabaja ese día.');
+        return;
+      }
+    
+      const inicioStr = hora;
+      const finStr = sumarMinutos(inicioStr, duracion);
+    
+      if (inicioStr < disponibilidad.start_time || finStr > disponibilidad.end_time) {
+        alert('La hora seleccionada está fuera del horario laboral del profesional.');
+        return;
+      }
+    
+      // Calcular fecha final
+      const fechaFin = new Date(fechaInicio.getTime() + duracion * 60000);
+    
+      // Verificar solapamiento con citas existentes
+      const { data: ocupadas, error: errorOcupadas } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('professional_id', profesionalId)
+        .or(`and(start_datetime,lt.${fechaFin.toISOString()},end_datetime,gt.${fechaInicio.toISOString()})`);
+    
+      if (ocupadas?.length > 0) {
+        alert('Ya hay una cita ocupando ese horario.');
+        return;
+      }
+
+      // Insertar cita
+      const { error: errorInsert } = await supabase
+        .from('appointments')
+        .insert([{
+          professional_id: profesionalId,
+          service_id: servicio.id,
+          client_id: cliente.id,
+          start_datetime: fechaInicio.toISOString(),
+          end_datetime: fechaFin.toISOString(),
+          price: precio,
+          status: 'scheduled'
+        }]);
+    
+      if (errorInsert) {
+        alert('Error al crear la cita.');
+      } else {
+        alert('Cita creada correctamente.');
+        cerrarFormulario();
+        buscarCitas();
+      }
+    }
+    
+    // Función para sumar minutos a una hora 'HH:MM'
+    function sumarMinutos(hora, minutos) {
+      const [h, m] = hora.split(':').map(Number);
+      const date = new Date();
+      date.setHours(h, m + minutos);
+      return date.toTimeString().slice(0, 5);
+    }
+    
+    
+    async function eliminarCita() {
+      if (!citaSeleccionada?.id) return;
+      const { error } = await supabase.from('appointments').delete().eq('id', citaSeleccionada.id);
+      if (!error) {
+        alert('Cita eliminada');
+        cerrarModal();
+        buscarCitas();
+      } else {
+        alert('Error al eliminar cita: ' + error.message);
+      }
+    }
+
+    function abrirEditor() {
+      document.getElementById('edit-servicio').value = citaSeleccionada.extendedProps.service || '';
+      document.getElementById('edit-cliente').value = citaSeleccionada.extendedProps.client || '';
+      document.getElementById('edit-inicio').value = citaSeleccionada.start.toISOString().slice(0,16); // Para datetime-local
+    
+      document.getElementById('edit-modal').style.display = 'block';
+      document.getElementById('edit-backdrop').style.display = 'block';
+    }
+    
+    function cerrarEditor() {
+      document.getElementById('edit-modal').style.display = 'none';
+      document.getElementById('edit-backdrop').style.display = 'none';
+    }
+
+    async function guardarEdicion() {
+      const servicioNombre = document.getElementById('edit-servicio').value.trim();
+      const clienteNombre = document.getElementById('edit-cliente').value.trim();
+      const inicio = document.getElementById('edit-inicio').value;
+      const profesionalId = document.getElementById('inputId').value.trim();
+    
+      if (!servicioNombre || !clienteNombre || !inicio || !profesionalId) {
+        alert('Rellena todos los campos.');
+        return;
+      }
+    
+      const { data: servicio, error: errorServicio } = await supabase
+        .from('services')
+        .select('id')
+        .ilike('name', servicioNombre)
+        .single();
+      if (errorServicio || !servicio) return alert('El servicio no existe.');
+    
+      const { data: rel, error: errorRel } = await supabase
+        .from('professional_services')
+        .select('custom_duration, custom_price')
+        .eq('service_id', servicio.id)
+        .eq('professional_id', profesionalId)
+        .eq('is_active', true)
+        .single();
+      if (errorRel || !rel) return alert('El profesional no ofrece ese servicio.');
+    
+      const { data: cliente, error: errorCliente } = await supabase
+        .from('clients')
+        .select('id')
+        .ilike('name', clienteNombre)
+        .single();
+      if (errorCliente || !cliente) return alert('El cliente no existe.');
+    
+      const fechaInicio = parseDatetimeLocalAsUTC(inicio);
+      const fechaFin = new Date(fechaInicio.getTime() + rel.custom_duration * 60000);
+    
+      const diaSemana = fechaInicio.getDay();
+      const hora = fechaInicio.toTimeString().slice(0,5);
+    
+      const { data: disponibilidad, error: errorDisp } = await supabase
+        .from('availability')
+        .select('start_time, end_time')
+        .eq('professional_id', profesionalId)
+        .eq('day_of_week', diaSemana)
+        .single();
+      if (!disponibilidad) return alert('No hay disponibilidad ese día.');
+    
+      const finHora = sumarMinutos(hora, rel.custom_duration);
+      if (hora < disponibilidad.start_time || finHora > disponibilidad.end_time)
+        return alert('Horario fuera del rango laboral.');
+    
+      // Comprobar solapamiento (excluyendo la cita actual)
+      const { data: ocupadas } = await supabase
+        .from('appointments')
+        .select('id')
+        .eq('professional_id', profesionalId)
+        .neq('id', citaSeleccionada.id)
+        .or(`and(start_datetime,lt.${fechaFin.toISOString()},end_datetime,gt.${fechaInicio.toISOString()})`);
+      if (ocupadas?.length > 0) return alert('Conflicto con otra cita.');
+    
+      // Actualizar
+      const { error: updateError } = await supabase
+        .from('appointments')
+        .update({
+          service_id: servicio.id,
+          client_id: cliente.id,
+          start_datetime: fechaInicio.toISOString(),
+          end_datetime: fechaFin.toISOString(),
+          price: rel.custom_price
+        })
+        .eq('id', citaSeleccionada.id);
+    
+      if (updateError) {
+        alert('Error al actualizar cita.');
+      } else {
+        alert('Cita actualizada.');
+        cerrarEditor();
+        cerrarModal();
+        buscarCitas();
+      }
+    }
+    
+    function formatearFechaUTC(date) {
+      const dia = date.getUTCDate();
+      const mes = date.getUTCMonth() + 1; // Los meses van de 0 a 11
+      const año = date.getUTCFullYear();
+      const horas = String(date.getUTCHours()).padStart(2, '0');
+      const minutos = String(date.getUTCMinutes()).padStart(2, '0');
+      const segundos = String(date.getUTCSeconds()).padStart(2, '0');
+      return `${dia}/${mes}/${año}, ${horas}:${minutos}:${segundos}`;
+    }    
+
+    async function buscarCitas() {
+      const input = document.getElementById('inputId');
+      const output = document.getElementById('mensaje');
+      const calendarEl = document.getElementById('calendar');
+      const professionalId = input.value.trim();
+
+      if (!professionalId) {
+        output.innerText = 'Por favor, escribe un ID válido.';
+        return;
+      }
+
+      output.innerText = 'Buscando citas...';
+
+      const { data: citas, error } = await supabase
+        .from('appointments')
+        .select('id, start_datetime, end_datetime, clients(name), services(name)')
+        .eq('professional_id', professionalId);
+
+      if (error) {
+        output.innerText = 'Error al cargar citas: ' + error.message;
+        return;
+      }
+
+      if (!citas.length) {
+        output.innerText = 'No se encontraron citas para este profesional.';
+        calendarEl.innerHTML = '';
+        return;
+      }
+
+      const eventos = citas.map(cita => ({
+        id: cita.id,
+        title: `${cita.services?.name} con ${cita.clients?.name}`,
+        start: cita.start_datetime,
+        end: cita.end_datetime,
+        extendedProps: {
+          client: cita.clients?.name,
+          service: cita.services?.name
+        },
+        color: '#3a87ad'
+      }));
+
+      output.innerText = '';
+
+      if (calendar) {
+        calendar.destroy();
+      }
+
+      calendar = new FullCalendar.Calendar(calendarEl, {
+        initialView: 'timeGridWeek',
+        timeZone: "UTC",
+        locale: 'es',
+        slotMinTime: "06:00:00",
+        slotMaxTime: "21:00:00",
+        slotDuration: "01:00:00",
+        allDaySlot: false,
+        events: eventos,
+        eventClick: function(info) {
+          citaSeleccionada = info.event;
+          document.getElementById('modal-title').innerText = info.event.extendedProps.service;
+          document.getElementById('modal-client').innerText = info.event.extendedProps.client;
+          document.getElementById('modal-start').innerText = formatearFechaUTC(new Date(info.event.start));
+          document.getElementById('modal-end').innerText = formatearFechaUTC(new Date(info.event.end));
+          document.getElementById('modal').style.display = 'block';
+          document.getElementById('backdrop').style.display = 'block';
+        }
+      });
+
+      calendar.render();
+    }
+  </script>
+</body>
+</html>
