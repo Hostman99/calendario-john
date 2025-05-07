@@ -396,9 +396,10 @@
       output.innerText = 'Buscando citas...';
 
       const { data: citas, error } = await supabase
-        .from('appointments')
-        .select('id, start_datetime, end_datetime, clients(name), services(name)')
-        .eq('professional_id', professionalId);
+      .from('appointments')
+      .select('id, start_datetime, end_datetime, clients(name), services(name)')
+      .eq('professional_id', professionalId)
+      .eq('status', 'scheduled');
 
       if (error) {
         output.innerText = 'Error al cargar citas: ' + error.message;
